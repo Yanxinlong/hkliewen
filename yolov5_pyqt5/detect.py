@@ -8,7 +8,7 @@ from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from models.common import DetectMultiBackend
-from utils.dataloaders import IMG_FORMATS, VID_FORMATS, LoadImages, LoadScreenshots, LoadStreams
+from utils.dataloaders import IMG_FORMATS, VID_FORMATS, LoadImages, LoadScreenshots, LoadStreams,LoadHKStreams
 from utils.general import (LOGGER, Profile, check_file, check_img_size, check_imshow, check_requirements, colorstr, cv2,
                            increment_path, non_max_suppression, print_args, scale_boxes, strip_optimizer, xyxy2xywh)
 from utils.myutil import Globals
@@ -54,6 +54,7 @@ def run(
     save_dir = increment_path(Path(project) / name, exist_ok=exist_ok)  # increment run
     (save_dir / 'labels' if save_txt else save_dir).mkdir(parents=True, exist_ok=True)  # make dir
     webcam = source.isnumeric()
+    hkcam = source.lower() == "hkcamera"
     # Load model
     device = select_device(device)
     model = DetectMultiBackend(weights, device=device, dnn=dnn, data=data, fp16=half)
@@ -64,6 +65,9 @@ def run(
     bs = 1  # batch_size
     if webcam:
         dataset = LoadStreams(source, img_size=imgsz, stride=stride, auto=pt, vid_stride=vid_stride)
+        bs = len(dataset)
+    elif hkcam:
+        dataset = LoadHKStreams(source, img_size=imgsz, stride=stride, auto=pt)
         bs = len(dataset)
     else:
         dataset = LoadImages(source, img_size=imgsz, stride=stride, auto=pt, vid_stride=vid_stride)
@@ -96,7 +100,7 @@ def run(
         # Process predictions
         for i, det in enumerate(pred):  # per image
             seen += 1
-            if webcam:  # batch_size >= 1
+            if webcam or hkcam:  # batch_size >= 1
                 p, im0, frame = path[i], im0s[i].copy(), dataset.count
                 s += f'{i}: '
             else:
@@ -157,5 +161,5 @@ def run(
         # self.label_2.setWidget(self.qw)
         # 关闭摄像头->退出
         if not Globals.camera_running and use_camera:
-            dataset.cap.release()  # 释放摄像头
+            dataset.camera.__del__()  # 释放摄像头
             break

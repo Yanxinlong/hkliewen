@@ -34,6 +34,7 @@ from utils.general import (DATASETS_DIR, LOGGER, NUM_THREADS, TQDM_BAR_FORMAT, c
                            check_yaml, clean_str, cv2, is_colab, is_kaggle, segments2boxes, unzip_file, xyn2xy,
                            xywh2xyxy, xywhn2xyxy, xyxy2xywhn)
 from utils.torch_utils import torch_distributed_zero_first
+from HKcamera import HKCamera
 
 # Parameters
 HELP_URL = 'See https://github.com/ultralytics/yolov5/wiki/Train-Custom-Data'
@@ -1219,3 +1220,81 @@ def create_classification_dataloader(path,
                               pin_memory=PIN_MEMORY,
                               worker_init_fn=seed_worker,
                               generator=generator)  # or DataLoader(persistent_workers=True)
+
+
+class LoadHKStreams:
+    # YOLOv5 streamloader, i.e. `python detect.py --source 'rtsp://example.com/media.mp4'  # RTSP, RTMP, HTTP streams`
+    def __init__(self, sources='HKcamera', img_size=640, stride=32, auto=True):
+        self.mode = 'stream'
+        self.img_size = img_size
+        self.stride = stride
+        self.camera = HKCamera()
+
+
+        if os.path.isfile(sources):
+            with open(sources) as f:
+                sources = [x.strip() for x in f.read().strip().splitlines() if len(x.strip())]
+        else:
+            sources = [sources]
+
+        n = len(sources)
+        self.imgs, self.fps, self.frames, self.threads = [None] * n, [0] * n, [0] * n, [None] * n
+        self.sources = [clean_str(x) for x in sources]
+        self.auto = auto
+        for i, s in enumerate(sources):  # index, source
+            # Start thread to read frames from video stream
+            st = f'{i + 1}/{n}: {s}... '
+
+            self.imgs[i] = self.camera.get_image()
+            h = self.imgs[i].shape[0]
+            w = self.imgs[i].shape[1]
+            fps = 30 # warning: may return 0 or nan
+            self.frames[i] =  float('inf')  # infinite stream fallback
+            self.fps[i] =  30  # 30 FPS fallback
+            self.threads[i] = Thread(target=self.update, args=([i,  s]), daemon=True)
+            LOGGER.info(f"{st} Success ({self.frames[i]} frames {w}x{h} at {self.fps[i]:.2f} FPS)")
+            self.threads[i].start()
+        LOGGER.info('')  # newline
+
+        # check for common shapes
+        s = np.stack([letterbox(x, self.img_size, stride=self.stride, auto=self.auto)[0].shape for x in self.imgs])
+        self.rect = np.unique(s, axis=0).shape[0] == 1  # rect inference if all shapes equal
+        if not self.rect:
+            LOGGER.warning('WARNING: Stream shapes differ. For optimal performance supply similarly-shaped streams.')
+
+    def update(self, i, stream):
+        # Read stream `i` frames in daemon thread
+        n, f, read = 0, self.frames[i], 1  # frame number, frame array, inference every 'read' frame
+        while True:
+            n += 1
+            # _, self.imgs[index] = cap.read()
+            if n % read == 0:
+                self.imgs[i] = self.camera.get_image()
+
+            time.sleep(0.0)  # wait time
+
+    def __iter__(self):
+        self.count = -1
+        return self
+
+    def __next__(self):
+        self.count += 1
+        if not all(x.is_alive() for x in self.threads) or cv2.waitKey(1) == ord('q'):  # q to quit
+            cv2.destroyAllWindows()
+            raise StopIteration
+
+        # Letterbox
+        img0 = self.imgs.copy()
+        img = [letterbox(x, self.img_size, stride=self.stride, auto=self.rect and self.auto)[0] for x in img0]
+
+        # Stack
+        img = np.stack(img, 0)
+
+        # Convert
+        img = img[..., ::-1].transpose((0, 3, 1, 2))  # BGR to RGB, BHWC to BCHW
+        img = np.ascontiguousarray(img)
+
+        return self.sources, img, img0, None, ''
+
+    def __len__(self):
+        return len(self.sources)  # 1E12 frames = 32 streams at 30 FPS for 30 years

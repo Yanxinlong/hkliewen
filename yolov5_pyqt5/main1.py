@@ -300,7 +300,7 @@ class CameraDetectionThread(QThread):
         self.label = label
         self.res = res
     def run(self):
-        detect.run(source=0, weights=self.model_path, show_label=self.label, save_img=False, use_camera=True,res_label=self.res)
+        detect.run(source="HKcamera", weights=self.model_path, show_label=self.label, save_img=False, use_camera=True,res_label=self.res)
 
 
 
